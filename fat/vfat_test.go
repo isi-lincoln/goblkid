@@ -1,5 +1,6 @@
 package fat
 
+/*
 import (
 	"testing"
 
@@ -15,3 +16,4 @@ func TestVfatWithMkfs(t *testing.T) {
 	assert.Equal(t, "vfat", info.ProbeName)
 	assert.Equal(t, label, info.Label)
 }
+*/

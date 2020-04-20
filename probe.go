@@ -18,17 +18,23 @@ const (
 type Prober struct {
 	Name       string
 	Usage      ProbeUsage
-	ProbeFunc  func(info *ProbeInfo, magicInfo MagicInfo) bool
+	ProbeFunc  func(info *ProbeInfo, magicInfo MagicInfo) (bool, error)
 	MagicInfos []MagicInfo
 }
 
-func (pr *Prober) Probe(info *ProbeInfo) bool {
+func (pr *Prober) Probe(info *ProbeInfo) (bool, error) {
 	for _, magic := range pr.MagicInfos {
-		if pr.ProbeFunc(info, magic) {
-			return true
+		ok, err := pr.ProbeFunc(info, magic)
+		if err != nil {
+			return false, err
+		}
+
+		if ok {
+			return true, nil
 		}
 	}
-	return false
+
+	return false, nil
 }
 
 type MagicInfo struct {
@@ -56,4 +62,22 @@ type ProbeInfo struct {
 	SecType    string
 
 	Version string
+}
+
+type Chain []Prober
+
+func (chain Chain) Probe(info *ProbeInfo) (bool, error) {
+	for _, prober := range chain {
+		ok, err := prober.Probe(info)
+		if err != nil {
+			return false, err
+		}
+
+		if ok {
+			info.ProbeName = prober.Name
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

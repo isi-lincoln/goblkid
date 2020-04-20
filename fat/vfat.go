@@ -6,58 +6,95 @@ import (
 	"io"
 	"strings"
 
-	"github.com/elazarl/goblkid"
+	"github.com/isi-lincoln/goblkid"
 )
 
-var Chain = goblkid.Chain{
+const (
+	FAT12_MAX = 0xFF4      // nolint:golint,stylecheck
+	FAT16_MAX = 0xFFF4     // nolint:golint,stylecheck
+	FAT32_MAX = 0x0FFFFFF6 // nolint:golint,stylecheck
+
+	FAT_ATTR_VOLUME_ID = 0x08 // nolint:golint,stylecheck
+	FAT_ATTR_DIR       = 0x10 // nolint:golint,stylecheck
+	FAT_ATTR_LONG_NAME = 0x0f // nolint:golint,stylecheck
+	FAT_ATTR_MASK      = 0x3f // nolint:golint,stylecheck
+	FAT_ENTRY_FREE     = 0xe5 // nolint:golint,stylecheck
+)
+
+var Chain = goblkid.Chain{ // nolint:gochecknoglobals
 	FATProber,
 }
 
-func vfatProbe(info *goblkid.ProbeInfo, magic goblkid.MagicInfo) bool {
-	_, err := info.DeviceReader.Seek(int64(magic.SuperblockKbOffset<<10), io.SeekStart)
+func vfatProbe(info *goblkid.ProbeInfo, magic goblkid.MagicInfo) (bool, error) { // nolint:funlen
+	_, err := info.DeviceReader.Seek(
+		int64(magic.SuperblockKbOffset<<10), // nolint:gomnd
+		io.SeekStart,
+	)
 	if err != nil {
-		return false
+		return false, err
 	}
+
 	ms, vs, err := vfatGetSuperblock(info.DeviceReader)
 	if err != nil {
-		return false
+		return false, err
 	}
 
 	if !isFATValidSuperblock(ms, vs, magic) {
-		return false
+		return false, err
 	}
-	fat_size := fatSize(ms, vs)
-	cluster_count := fatClusterCount(ms, vs)
+
+	fatSize := fatSize(ms, vs)
+	clusterCount := fatClusterCount(ms, vs)
 
 	version := ""
+
 	if ms.FatLength != 0 {
-		root_start := (uint32(ms.Reserved) + fat_size) * uint32(ms.SectorSize)
-		info.Label = searchFATLabel(info, uint64(root_start), uint32(vs.DirEntries))
+		rootStart := (uint32(ms.Reserved) + fatSize) * uint32(ms.SectorSize)
+		info.Label, err = searchFATLabel(info, uint64(rootStart), uint32(vs.DirEntries))
+
+		if err != nil {
+			return false, err
+		}
+
 		info.SecType = "msdos"
-		if cluster_count < FAT12_MAX {
+
+		if clusterCount < FAT12_MAX {
 			version = "FAT12"
-		} else if cluster_count < FAT16_MAX {
+		} else if clusterCount < FAT16_MAX {
 			version = "FAT16"
 		}
+
 		info.UUID = fmt.Sprintf("%02X%02X-%02X%02X",
 			ms.Serno[3], ms.Serno[2], ms.Serno[1], ms.Serno[0])
 	} else if vs.Fat32Length != 0 {
 		bufSize := uint32(vs.ClusterSize) + uint32(ms.SectorSize)
-		start_data_sect := uint32(ms.Reserved) + fat_size
-		entries := vs.Fat32Length * uint32(ms.SectorSize) / 4 // 4=sizeof(uint32)
-		next := uint32(vs.RootCluster)
+		startDataSect := uint32(ms.Reserved) + fatSize
+		entries := vs.Fat32Length * uint32(ms.SectorSize) / 4 // nolint:gomnd // 4=sizeof(uint32)
+		next := vs.RootCluster
 
-		vfat_dir_entry_size := uint32(32)
+		vfatDirEntrySize := uint32(32) // nolint:gomnd
 		for maxloop := 100; next != 0 && next < entries && maxloop > 0; maxloop-- {
-			next_sect_off := (next - 2) * uint32(vs.ClusterSize)
-			next_off := uint64(start_data_sect+next_sect_off) * uint64(ms.SectorSize)
-			count := bufSize / vfat_dir_entry_size
-			info.Label = searchFATLabel(info, next_off, count)
+			nextSectOffset := (next - 2) * uint32(vs.ClusterSize)
+			nextOffset := uint64(startDataSect+nextSectOffset) * uint64(ms.SectorSize)
+			count := bufSize / vfatDirEntrySize
+			info.Label, err = searchFATLabel(info, nextOffset, count)
+			if err != nil {
+				return false, err
+			}
 
-			fat_entry_off := uint64(ms.Reserved)*uint64(ms.SectorSize) +
-				uint64(next)*4 // 4=sizeof(uint32)
-			info.DeviceReader.Seek(int64(fat_entry_off), io.SeekStart)
-			binary.Read(info.DeviceReader, binary.LittleEndian, &next)
+			fatEntryOffset := uint64(ms.Reserved)*uint64(ms.SectorSize) +
+				uint64(next)*4 // nolint:gomnd // 4=sizeof(uint32)
+			_, err = info.DeviceReader.Seek(
+				int64(fatEntryOffset),
+				io.SeekStart,
+			)
+			if err != nil {
+				return false, err
+			}
+			err = binary.Read(info.DeviceReader, binary.LittleEndian, &next)
+			if err != nil {
+				return false, err
+			}
 			next &= 0x0fffffff
 		}
 		version = "FAT32"
@@ -67,50 +104,63 @@ func vfatProbe(info *goblkid.ProbeInfo, magic goblkid.MagicInfo) bool {
 
 	info.Version = version
 
-	return true
+	return true, nil
 }
 
-func searchFATLabel(info *goblkid.ProbeInfo, root_start uint64, dir_entries uint32) string {
-	info.DeviceReader.Seek(int64(root_start), io.SeekStart)
-	for i := uint32(0); i < dir_entries; i++ {
-		ent, err := unpack_vfat_dir_entry(info.DeviceReader)
+func searchFATLabel(info *goblkid.ProbeInfo, rootStart uint64, dirEntries uint32) (string, error) {
+	_, err := info.DeviceReader.Seek(
+		int64(rootStart),
+		io.SeekStart,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	for i := uint32(0); i < dirEntries; i++ {
+		ent, err := unpackVFATDirEntry(info.DeviceReader)
 		if err != nil {
 			panic(err)
 		}
+
 		if ent.Name[0] == 0 {
 			break
 		}
+
 		if ent.Name[0] == FAT_ENTRY_FREE ||
 			ent.ClusterHigh != 0 ||
 			ent.ClusterLow != 0 ||
 			ent.Attr&FAT_ATTR_MASK == FAT_ATTR_LONG_NAME {
 			continue
 		}
+
 		if ent.Attr&(FAT_ATTR_VOLUME_ID|FAT_ATTR_DIR) == FAT_ATTR_VOLUME_ID {
-			return strings.TrimRight(string(ent.Name[:]), " \n\t")
+			return strings.TrimRight(ent.Name, " \n\t"), nil
 		}
 	}
-	return ""
+
+	return "", nil
 }
 
-func fatSize(ms *msdos_super_block, vs *vfat_super_block) uint32 {
-	var fat_length = uint32(ms.FatLength)
-	if fat_length == 0 {
-		fat_length = vs.Fat32Length
+func fatSize(ms *msdosSuperBlock, vs *vfatSuperBlock) uint32 {
+	var fatLength = uint32(ms.FatLength)
+	if fatLength == 0 {
+		fatLength = vs.Fat32Length
 	}
-	return fat_length * uint32(ms.Fats)
+
+	return fatLength * uint32(ms.Fats)
 }
 
-func fatClusterCount(ms *msdos_super_block, vs *vfat_super_block) uint32 {
-	entry_size := uint32(32)
-	fat_size := fatSize(ms, vs)
+func fatClusterCount(ms *msdosSuperBlock, vs *vfatSuperBlock) uint32 {
+	entrySize := uint32(32) // nolint:gomnd
+	fatSize := fatSize(ms, vs)
 
-	dir_size := (uint32(ms.DirEntries)*entry_size + uint32(ms.SectorSize-1)) / uint32(ms.SectorSize)
-	return (uint32(ms.Sectors) - (uint32(ms.Reserved) + fat_size + dir_size)) / uint32(ms.ClusterSize)
+	dirSize := (uint32(ms.DirEntries)*entrySize + uint32(ms.SectorSize-1)) / uint32(ms.SectorSize)
+
+	return (uint32(ms.Sectors) - (uint32(ms.Reserved) + fatSize + dirSize)) / uint32(ms.ClusterSize)
 }
 
-func isFATValidSuperblock(ms *msdos_super_block, vs *vfat_super_block, magic goblkid.MagicInfo) bool {
-	if len(magic.Magic) <= 2 {
+func isFATValidSuperblock(ms *msdosSuperBlock, vs *vfatSuperBlock, magic goblkid.MagicInfo) bool { // nolint:funlen,gocognit,lll
+	if len(magic.Magic) <= 2 { // nolint:gomnd
 		/* Old floppies have a valid MBR signature */
 		if ms.Pmagic[0] != 0x55 || ms.Pmagic[1] != 0xAA {
 			return false
@@ -134,12 +184,15 @@ func isFATValidSuperblock(ms *msdos_super_block, vs *vfat_super_block, magic gob
 	if ms.Fats == 0 {
 		return false
 	}
+
 	if ms.Reserved == 0 {
 		return false
 	}
+
 	if !(0xf8 <= ms.Media || ms.Media == 0xf0) {
 		return false
 	}
+
 	if !isPowerOf2(int(ms.ClusterSize)) {
 		return false
 	}
@@ -154,57 +207,61 @@ func isFATValidSuperblock(ms *msdos_super_block, vs *vfat_super_block, magic gob
 	if sectors == 0 {
 		sectors = ms.TotalSect
 	}
-	fat_length := uint32(ms.FatLength)
-	if fat_length == 0 {
-		fat_length = vs.Fat32Length
+
+	fatLength := uint32(ms.FatLength)
+
+	if fatLength == 0 {
+		fatLength = vs.Fat32Length
 	}
 
-	entry_size := uint32(32)
-	fat_size := fat_length * uint32(ms.Fats)
-	dir_size := (uint32(ms.DirEntries)*entry_size + uint32(ms.SectorSize-1)) / uint32(ms.SectorSize)
-	cluster_count := (sectors - (uint32(ms.Reserved) + fat_size + dir_size)) / uint32(ms.ClusterSize)
+	entrySize := uint32(32) // nolint:gomnd
+	fatSize := fatLength * uint32(ms.Fats)
+	dirSize := (uint32(ms.DirEntries)*entrySize + uint32(ms.SectorSize-1)) / uint32(ms.SectorSize)
+	clusterCount := (sectors - (uint32(ms.Reserved) + fatSize + dirSize)) / uint32(ms.ClusterSize)
 
-	max_count := uint32(FAT12_MAX)
-	if cluster_count > FAT12_MAX {
-		max_count = FAT16_MAX
+	maxCount := uint32(FAT12_MAX)
+	if clusterCount > FAT12_MAX {
+		maxCount = FAT16_MAX
 	}
+
 	if ms.FatLength == 0 && vs.Fat32Length != 0 {
-		max_count = FAT32_MAX
+		maxCount = FAT32_MAX
 	}
 
-	if cluster_count > max_count {
+	if clusterCount > maxCount {
 		return false
 	}
-	/* TODO: missing whole-disk heuristic, to exclude MBRs that looks like FAT */
+	/* TODO: missing whole-disk heuristic, to exclude MBRs that looks like FAT */ //nolint
 
 	return true
 }
 
-var FATProber = goblkid.Prober{
+var FATProber = goblkid.Prober{ // nolint: gochecknoglobals
 	Name:      "vfat",
 	Usage:     goblkid.FilesystemProbe,
 	ProbeFunc: vfatProbe,
 	MagicInfos: []goblkid.MagicInfo{
-		{"MSWIN", 0, 0x52},
-		{"FAT32", 0, 0x52},
-		{"MSDOS", 0, 0x36},
-		{"FAT16", 0, 0x36},
-		{"FAT12", 0, 0x36},
-		{"FAT", 0, 0x36},
-		{"\353", 0, 0},
-		{"\351", 0, 0},
-		{"\125\252", 0, 0x1fe},
+		{Magic: "MSWIN", SuperblockKbOffset: 0, MagicByteOffset: 0x52},     // nolint:gomnd
+		{Magic: "FAT32", SuperblockKbOffset: 0, MagicByteOffset: 0x56},     // nolint:gomnd
+		{Magic: "MSDOS", SuperblockKbOffset: 0, MagicByteOffset: 0x36},     // nolint:gomnd
+		{Magic: "FAT16", SuperblockKbOffset: 0, MagicByteOffset: 0x36},     // nolint:gomnd
+		{Magic: "FAT12", SuperblockKbOffset: 0, MagicByteOffset: 0x36},     // nolint:gomnd
+		{Magic: "FAT", SuperblockKbOffset: 0, MagicByteOffset: 0x36},       // nolint:gomnd
+		{Magic: "\353", SuperblockKbOffset: 0, MagicByteOffset: 0},         // nolint:gomnd
+		{Magic: "\351", SuperblockKbOffset: 0, MagicByteOffset: 0},         // nolint:gomnd
+		{Magic: "\125\252", SuperblockKbOffset: 0, MagicByteOffset: 0x1fe}, // nolint:gomnd
 	},
 }
 
 const SuperblockSize = 512
 
-func vfatGetSuperblock(r io.Reader) (*msdos_super_block, *vfat_super_block, error) {
+func vfatGetSuperblock(r io.Reader) (*msdosSuperBlock, *vfatSuperBlock, error) {
 	buf := make([]byte, 512)
 	if _, err := io.ReadAtLeast(r, buf, SuperblockSize); err != nil {
 		return nil, nil, err
 	}
-	common := superblock_common{}
+
+	common := superBlockCommon{}
 	copy(common.Ignored[:], buf[:3])
 	copy(common.Sysid[:], buf[3:0xb])
 	common.SectorSize = binary.LittleEndian.Uint16(buf[0x0b:0x0d])
@@ -220,7 +277,7 @@ func vfatGetSuperblock(r io.Reader) (*msdos_super_block, *vfat_super_block, erro
 	common.Hidden = binary.LittleEndian.Uint32(buf[0x1c:0x20])
 	common.TotalSect = binary.LittleEndian.Uint32(buf[0x20:0x24])
 
-	ms := &msdos_super_block{superblock_common: common}
+	ms := &msdosSuperBlock{superBlockCommon: common}
 	copy(ms.Unknown[:], buf[0x24:0x24+3])
 	copy(ms.Serno[:], buf[0x27:0x2b])
 	copy(ms.Label[:], buf[0x2b:0x36])
@@ -228,7 +285,7 @@ func vfatGetSuperblock(r io.Reader) (*msdos_super_block, *vfat_super_block, erro
 	copy(ms.Dummy2[:], buf[0x3e:0x1fe])
 	copy(ms.Pmagic[:], buf[0x1fe:0x200])
 
-	vs := &vfat_super_block{superblock_common: common}
+	vs := &vfatSuperBlock{superBlockCommon: common}
 	vs.Fat32Length = binary.LittleEndian.Uint32(buf[0x24:0x28])
 	vs.Flags = binary.LittleEndian.Uint16(buf[0x28:0x2a])
 	vs.Version = binary.LittleEndian.Uint16(buf[0x2a:0x2c])
@@ -246,7 +303,7 @@ func vfatGetSuperblock(r io.Reader) (*msdos_super_block, *vfat_super_block, erro
 	return ms, vs, nil
 }
 
-type superblock_common struct {
+type superBlockCommon struct { // nolint:maligned
 	/* 00*/ Ignored [3]uint8
 	/* 03*/ Sysid [8]uint8
 	/* 0b*/ SectorSize uint16
@@ -265,8 +322,8 @@ type superblock_common struct {
 }
 
 /* Yucky misaligned values */
-type vfat_super_block struct {
-	superblock_common
+type vfatSuperBlock struct {
+	superBlockCommon
 	/* 24*/ Fat32Length uint32
 	/* 28*/ Flags uint16
 	/* 2a*/ Version uint16
@@ -283,8 +340,8 @@ type vfat_super_block struct {
 }
 
 /* Yucky misaligned values */
-type msdos_super_block struct {
-	superblock_common
+type msdosSuperBlock struct {
+	superBlockCommon
 	/* V4 BPB */
 	/* 24*/
 	Unknown [3]uint8 /* Phys drive no., resvd, V4 sig (0x29) */
@@ -295,7 +352,7 @@ type msdos_super_block struct {
 	/*1fe*/ Pmagic [2]uint8
 }
 
-type vfat_dir_entry struct {
+type vfatDirEntry struct {
 	Name        string `struc:"[11]uint8"` /* 0-10 */
 	Attr        uint8  /* 11 */
 	TimeCreat   uint16 /* 12-13 */
@@ -309,13 +366,15 @@ type vfat_dir_entry struct {
 	Size        uint32 /* 28-31 */
 }
 
-func unpack_vfat_dir_entry(r io.Reader) (*vfat_dir_entry, error) {
-	size := 11 + 1 + 8*2 + 4
+func unpackVFATDirEntry(r io.Reader) (*vfatDirEntry, error) {
+	size := 11 + 1 + 8*2 + 4 // nolint:gomnd
 	b := make([]byte, size)
+
 	if _, err := io.ReadAtLeast(r, b, len(b)); err != nil {
 		return nil, err
 	}
-	return &vfat_dir_entry{
+
+	return &vfatDirEntry{
 		string(b[0:11]),
 		b[11],
 		binary.LittleEndian.Uint16(b[12:14]),
@@ -329,18 +388,6 @@ func unpack_vfat_dir_entry(r io.Reader) (*vfat_dir_entry, error) {
 		binary.LittleEndian.Uint32(b[28:32]),
 	}, nil
 }
-
-const FAT12_MAX = 0xFF4
-const FAT16_MAX = 0xFFF4
-const FAT32_MAX = 0x0FFFFFF6
-
-const FAT_ATTR_VOLUME_ID = 0x08
-const FAT_ATTR_DIR = 0x10
-const FAT_ATTR_LONG_NAME = 0x0f
-const FAT_ATTR_MASK = 0x3f
-const FAT_ENTRY_FREE = 0xe5
-
-var no_name = "NO NAME    "
 
 func isPowerOf2(num int) bool {
 	return (num != 0 && ((num & (num - 1)) == 0))

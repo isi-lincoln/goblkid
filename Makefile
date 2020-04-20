@@ -29,6 +29,12 @@ spotless: clean
 	rm -rf vendor
 	rm -rf u-root u-root.bin
 
+lint: bin/golangci-lint
+	./bin/golangci-lint run --enable-all ./...
+
+bin/golangci-lint:
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s v1.24.0
+
 define commands
 	./u-root.bin -format=cpio -build=bb -o build/$1.cpio \
 		-defaultsh /bbin/elvish \

@@ -6,12 +6,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	// verbose is the logging level debug
-	verbose bool
-)
-
 func main() {
+	// verbose is the logging level debug
+	var verbose bool
 
 	root := &cobra.Command{
 		Use:   "goblkid",
@@ -64,5 +61,8 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	root.Execute()
+	err := root.Execute()
+	if err != nil {
+		log.Fatal(err)
+	}
 }
