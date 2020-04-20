@@ -4,14 +4,23 @@ import (
 	"io"
 )
 
+// ProbeUsage is the type of probe being used
 type ProbeUsage int
 
+// ProbeUsage mappings
 const (
 	FilesystemProbe ProbeUsage = 1 << iota
 	RaidProbe
 	CryptoProbe
 	OtherProbe
 )
+
+type Prober struct {
+	Name       string
+	Usage      ProbeUsage
+	ProbeFunc  func(info *ProbeInfo, magicInfo MagicInfo) bool
+	MagicInfos []MagicInfo
+}
 
 func (pr *Prober) Probe(info *ProbeInfo) bool {
 	for _, magic := range pr.MagicInfos {
@@ -20,13 +29,6 @@ func (pr *Prober) Probe(info *ProbeInfo) bool {
 		}
 	}
 	return false
-}
-
-type Prober struct {
-	Name       string
-	Usage      ProbeUsage
-	ProbeFunc  func(info *ProbeInfo, magicInfo MagicInfo) bool
-	MagicInfos []MagicInfo
 }
 
 type MagicInfo struct {
