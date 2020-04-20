@@ -1,4 +1,4 @@
-# goblkid: Simpligied libblkid for u-root
+# goblkid: Simplified libblkid for u-root
 
 Forked from github.com/elzaral/goblkid
 
