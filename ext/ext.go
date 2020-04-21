@@ -8,6 +8,7 @@ import (
 
 	"github.com/isi-lincoln/goblkid"
 	"github.com/lunixbochs/struc"
+	//log "github.com/sirupsen/logrus"
 )
 
 // EXT constant values
@@ -52,11 +53,18 @@ const (
 	EXT2_FEATURE_INCOMPAT_FILETYPE |
 		EXT3_FEATURE_INCOMPAT_RECOVER |
 		EXT2_FEATURE_INCOMPAT_META_BG)
+
+	JbdName     = "jbd"
+	Ext2Name    = "ext2"
+	Ext3Name    = "ext3"
+	Ext4Name    = "ext4"
+	Ext4devName = "ext4dev"
 )
 
 var (
-	//extMagic is the magic number for ext filesystems
-	extMagic = []goblkid.MagicInfo{ // nolint:gochecknoglobals
+	// ExtMagic is the magic number for ext filesystems
+	// https://ext4.wiki.kernel.org/index.php/Ext4_Disk_Layout
+	ExtMagic = []goblkid.MagicInfo{ // nolint:gochecknoglobals
 		{
 			Magic:              "\123\357",  // nolint:gomnd
 			SuperblockKbOffset: 0x400 >> 10, // nolint:gomnd
@@ -131,6 +139,7 @@ func ext4Probe(info *goblkid.ProbeInfo, magic goblkid.MagicInfo) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	/* Distinguish from jbd */
 	if sb.FeatureIncompat&EXT3_FEATURE_INCOMPAT_JOURNAL_DEV != 0 {
 		return false, nil
@@ -182,7 +191,7 @@ func ext2GetSuper(info *goblkid.ProbeInfo) (*ext2SuperBlock, error) {
 	var sb ext2SuperBlock
 
 	_, err := info.DeviceReader.Seek(
-		int64(extMagic[0].SuperblockKbOffset<<10), // nolint:gomnd
+		int64(ExtMagic[0].SuperblockKbOffset<<10), // nolint:gomnd
 		io.SeekStart,
 	)
 
@@ -211,38 +220,38 @@ func extGetInfo(info *goblkid.ProbeInfo, extVersion int, sb *ext2SuperBlock) {
 }
 
 var Jbd2Prober = goblkid.Prober{ // nolint:gochecknoglobals
-	Name:       "jbd",
+	Name:       JbdName,
 	Usage:      goblkid.FilesystemProbe,
 	ProbeFunc:  jbdProbe,
-	MagicInfos: extMagic,
+	MagicInfos: ExtMagic,
 }
 
 var Ext2Prober = goblkid.Prober{ // nolint:gochecknoglobals
-	Name:       "ext2",
+	Name:       Ext2Name,
 	Usage:      goblkid.FilesystemProbe,
 	ProbeFunc:  ext2Probe,
-	MagicInfos: extMagic,
+	MagicInfos: ExtMagic,
 }
 
 var Ext3Prober = goblkid.Prober{ // nolint:gochecknoglobals
-	Name:       "ext3",
+	Name:       Ext3Name,
 	Usage:      goblkid.FilesystemProbe,
 	ProbeFunc:  ext3Probe,
-	MagicInfos: extMagic,
+	MagicInfos: ExtMagic,
 }
 
 var Ext4Prober = goblkid.Prober{ // nolint:gochecknoglobals
-	Name:       "ext4",
+	Name:       Ext4Name,
 	Usage:      goblkid.FilesystemProbe,
 	ProbeFunc:  ext4Probe,
-	MagicInfos: extMagic,
+	MagicInfos: ExtMagic,
 }
 
 var Ext4DevProber = goblkid.Prober{ // nolint:gochecknoglobals
-	Name:       "ext4dev",
+	Name:       Ext4devName,
 	Usage:      goblkid.FilesystemProbe,
 	ProbeFunc:  ext4devProbe,
-	MagicInfos: extMagic,
+	MagicInfos: ExtMagic,
 }
 
 type ext2SuperBlock struct {

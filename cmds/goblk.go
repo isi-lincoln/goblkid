@@ -1,7 +1,7 @@
 package main
 
 import (
-	//"github.com/isi-lincoln/goblkid"
+	goblkid "github.com/isi-lincoln/goblkid/wipefs"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -12,14 +12,8 @@ func main() {
 
 	root := &cobra.Command{
 		Use:   "goblkid",
-		Short: "Interact go libblkid",
+		Short: "Interact with miniature go libblkid",
 	}
-
-	add := &cobra.Command{
-		Use:   "add",
-		Short: "add things",
-	}
-	root.AddCommand(add)
 
 	get := &cobra.Command{
 		Use:   "get",
@@ -27,32 +21,39 @@ func main() {
 	}
 	root.AddCommand(get)
 
-	list := &cobra.Command{
-		Use:   "list",
-		Short: "list things",
+	wipe := &cobra.Command{
+		Use:   "wipe",
+		Short: "wipe things",
 	}
-	root.AddCommand(list)
+	root.AddCommand(wipe)
+
+	getInfo := &cobra.Command{
+		Use:   "info [device]",
+		Short: "Get block device information",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			info, err := goblkid.GetProbeInfo(args[0])
+			if err != nil {
+				log.Fatal(err)
+			}
+			goblkid.PrintProbeInfo(info)
+		},
+	}
+	get.AddCommand(getInfo)
 
 	// GET COMMANDS
-	getMac := &cobra.Command{
-		Use:   "command [mac]",
-		Short: "Get command for mac",
-		Args:  cobra.MinimumNArgs(1),
+	wipeFS := &cobra.Command{
+		Use:   "fs [device]",
+		Short: "Get block device information",
+		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			//GetCommand(args[0])
+			err := goblkid.WipeFileSystemSignature(args[0])
+			if err != nil {
+				log.Fatal(err)
+			}
 		},
 	}
-	get.AddCommand(getMac)
-
-	getID := &cobra.Command{
-		Use:   "id [mac]",
-		Short: "Get id of mac addr",
-		Args:  cobra.MinimumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			//GetID(args[0])
-		},
-	}
-	get.AddCommand(getID)
+	wipe.AddCommand(wipeFS)
 
 	root.PersistentFlags().BoolVarP(
 		&verbose, "verbose", "v", false, "verbose output")

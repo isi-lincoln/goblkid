@@ -19,6 +19,8 @@ const (
 	FAT_ATTR_LONG_NAME = 0x0f // nolint:golint,stylecheck
 	FAT_ATTR_MASK      = 0x3f // nolint:golint,stylecheck
 	FAT_ENTRY_FREE     = 0xe5 // nolint:golint,stylecheck
+
+	FatName = "vfat"
 )
 
 var Chain = goblkid.Chain{ // nolint:gochecknoglobals
@@ -237,7 +239,7 @@ func isFATValidSuperblock(ms *msdosSuperBlock, vs *vfatSuperBlock, magic goblkid
 }
 
 var FATProber = goblkid.Prober{ // nolint: gochecknoglobals
-	Name:      "vfat",
+	Name:      FatName,
 	Usage:     goblkid.FilesystemProbe,
 	ProbeFunc: vfatProbe,
 	MagicInfos: []goblkid.MagicInfo{
